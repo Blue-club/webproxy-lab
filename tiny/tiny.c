@@ -11,9 +11,9 @@
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
-void serve_static(int fd, char *filename, int filesize);
+void serve_static(int fd, char *filename, int filesize, char *method);
 void get_filetype(char *filename, char *filetype);
-void serve_dynamic(int fd, char *filename, char *cgiargs);
+void serve_dynamic(int fd, char *filename, char *cgiargs, char *method);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
 
@@ -61,6 +61,7 @@ void doit(int fd) {
     return;
   }
 
+
   read_requesthdrs(&rio); 
 
   /* Parse URI from GET request */
@@ -75,14 +76,14 @@ void doit(int fd) {
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
       return;
     }
-    serve_static(fd, filename, sbuf.st_size);
+    serve_static(fd, filename, sbuf.st_size, method);
   }
   else { /* Serve dynamic content */
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) { 
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program"); 
       return;
     }
-    serve_dynamic(fd, filename, cgiargs);
+    serve_dynamic(fd, filename, cgiargs, method);
   }  
 }
 
@@ -96,9 +97,9 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
   sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
   sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
   sprintf(body, "%s<hr><em>The Tiny Web Server</em>\r\n", body);
-
+  
   /* Print the HTTP response */
-  sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
+  sprintf(buf, "HTTP/1.1 %s %s\r\n", errnum, shortmsg);
   Rio_writen(fd, buf, strlen(buf));
   sprintf(buf, "Content-type: text/html\r\n");
   Rio_writen(fd, buf, strlen(buf));
@@ -132,7 +133,7 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
   /* uri에 cgi-bin이 없다면, 즉 정적 컨텐츠를 요청한다면 1을 리턴한다. */
 
   // 예시
-  // Request Line: GET /godzilla.jpg HTTP/1.1
+  // Request Line: GET /godzilla.jpg HTTP/1.0
   // uri: /godzilla.jpg
   // cgiargs: x(없음)
   // filename: ./home.html
@@ -178,14 +179,14 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
   }
 }
 
-void serve_static(int fd, char *filename, int filesize)
+void serve_static(int fd, char *filename, int filesize, char *method)
 {
   int srcfd;
   char *srcp, filetype[MAXLINE], buf[MAXBUF];
 
   /* Send response headers to client */
   get_filetype(filename, filetype);                         // 파일 이름의 접미어 부분 검사 => 파일 타입 결정
-  sprintf(buf, "HTTP/1.0 200 OK\r\n");                      // 응답 라인 작성
+  sprintf(buf, "HTTP/1.1 200 OK\r\n");                      // 응답 라인 작성
   sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);       // 응답 헤더 작성
   sprintf(buf, "%sConnections: close\r\n", buf);
   sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
@@ -196,20 +197,22 @@ void serve_static(int fd, char *filename, int filesize)
   printf("Response headers: \n");
   printf("%s", buf);
 
-
-  /* Send response body to client */
-  srcfd = Open(filename, O_RDONLY, 0);  // filename의 이름을 갖는 파일을 읽기 권한으로 불러온다.
-  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // 메모리에 파일 내용을 동적할당한다.
-  Close(srcfd);                         // 소켓을 열어놓는 것은 "치명적"인 메모리 누수 발생시킴 ..
-  Rio_writen(fd, srcp, filesize);       // 해당 메모리에 있는 파일 내용들을 fd에 보낸다.(읽는다.)
-  Munmap(srcp, filesize);               // 할당된 메모리 공간을 해제한다.
+  // /* Send response body to client */
+  // srcfd = Open(filename, O_RDONLY, 0);  // filename의 이름을 갖는 파일을 읽기 권한으로 불러온다.
+  // srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // 메모리에 파일 내용을 동적할당한다.
+  // Close(srcfd);                         // 소켓을 열어놓는 것은 "치명적"인 메모리 누수 발생시킴 ..
+  // Rio_writen(fd, srcp, filesize);       // 해당 메모리에 있는 파일 내용들을 fd에 보낸다.(읽는다.)
+  // Munmap(srcp, filesize);               // 할당된 메모리 공간을 해제한다.
 
   // Homework 11.9: 정적 컨텐츠 처리할 때 요청 파일 malloc, rio_readn, rio_writen 사용하여 연결 식별자에게 복사
-  // srcp = (char *)malloc(filesize);
-  // rio_readn(srcfd, srcp, filesize);
-  // Close(srcfd);
-  // rio_writen(fd, srcp, filesize);
-  // free(srcp);
+  if (strcasecmp(method, "GET") == 0){
+    srcfd = Open(filename, O_RDONLY, 0);  // filename의 이름을 갖는 파일을 읽기 권한으로 불러온다.
+    srcp = (char *)malloc(filesize);
+    rio_readn(srcfd, srcp, filesize);
+    Close(srcfd);
+    rio_writen(fd, srcp, filesize);
+    free(srcp);
+  }
 }
 
 /*get_filetype - Derive file type from filename */
@@ -223,17 +226,15 @@ void get_filetype(char *filename, char *filetype)
     strcpy(filetype, "image/png");
   else if (strstr(filename, ".jpg"))
     strcpy(filetype, "image/jpeg");
-
-  // Homework 11.7: html5 not supporting "mpg file format"
   else if (strstr(filename, ".mpg"))
-    strcpy(filetype, "video/mpg");
+    strcpy(filetype, "video/mpg"); // homework 11.7 mpg_video
   else if (strstr(filename, ".mp4"))
-    strcpy(filetype, "video/mp4");
+    strcpy(filetype, "video/mp4"); 
   else
     strcpy(filetype, "text/plain");
 }
 
-void serve_dynamic(int fd, char *filename, char *cgiargs)
+void serve_dynamic(int fd, char *filename, char *cgiargs, char *method)
 { 
   // fork(): 함수를 호출한 프로세스를 복사하는 기능
   // 부모 프로세스(원래 진행되던 프로세스), 자식 프로세스(복사된 프로세스)
@@ -241,7 +242,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
   char buf[MAXLINE], *emptylist[] = {NULL};
 
   /* Return first part of HTTP response */
-  sprintf(buf, "HTTP/1.0 200 OK\r\n");
+  sprintf(buf, "HTTP/1.1 200 OK\r\n");
   Rio_writen(fd, buf, strlen(buf));
   sprintf(buf, "Server: Tiny Web Server\r\n");
   Rio_writen(fd, buf, strlen(buf));
