@@ -11,7 +11,7 @@
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
-void serve_static(int fd, char *filename, int filesize);
+void serve_static(int fd, char *filename, int filesize,char *method);
 void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
@@ -75,7 +75,7 @@ void doit(int fd) {
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
       return;
     }
-    serve_static(fd, filename, sbuf.st_size);
+    serve_static(fd, filename, sbuf.st_size, method);
   }
   else { /* Serve dynamic content */
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) { 
@@ -178,7 +178,7 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
   }
 }
 
-void serve_static(int fd, char *filename, int filesize)
+void serve_static(int fd, char *filename, int filesize,char *method)
 {
   int srcfd;
   char *srcp, filetype[MAXLINE], buf[MAXBUF];
@@ -194,22 +194,26 @@ void serve_static(int fd, char *filename, int filesize)
   /* 응답 라인과 헤더를 클라이언트에게 보냄 */
   Rio_writen(fd, buf, strlen(buf)); 
   printf("Response headers: \n");
+  
+
   printf("%s", buf);
 
-
-  /* Send response body to client */
+  if (!strcasecmp(method, "GET")){
   srcfd = Open(filename, O_RDONLY, 0);  // filename의 이름을 갖는 파일을 읽기 권한으로 불러온다.
-  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // 메모리에 파일 내용을 동적할당한다.
-  Close(srcfd);                         // 소켓을 열어놓는 것은 "치명적"인 메모리 누수 발생시킴 ..
-  Rio_writen(fd, srcp, filesize);       // 해당 메모리에 있는 파일 내용들을 fd에 보낸다.(읽는다.)
-  Munmap(srcp, filesize);               // 할당된 메모리 공간을 해제한다.
+  // srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // 메모리에 파일 내용을 동적할당한다.
+  // Close(srcfd);                         // 소켓을 열어놓는 것은 "치명적"인 메모리 누수 발생시킴 ..
+  // Rio_writen(fd, srcp, filesize);       // 해당 메모리에 있는 파일 내용들을 fd에 보낸다.(읽는다.)
+  // Munmap(srcp, filesize);               // 할당된 메모리 공간을 해제한다.
 
-  // Homework 11.9: 정적 컨텐츠 처리할 때 요청 파일 malloc, rio_readn, rio_writen 사용하여 연결 식별자에게 복사
-  // srcp = (char *)malloc(filesize);
-  // rio_readn(srcfd, srcp, filesize);
-  // Close(srcfd);
-  // rio_writen(fd, srcp, filesize);
-  // free(srcp);
+  //Homework 11.9: 정적 컨텐츠 처리할 때 요청 파일 malloc, rio_readn, rio_writen 사용하여 연결 식별자에게 복사
+  srcp = (char *)malloc(filesize);
+  rio_readn(srcfd, srcp, filesize); 
+  Close(srcfd);
+  rio_writen(fd, srcp, filesize);
+  free(srcp);
+  }
+  /* Send response body to client */
+ 
 }
 
 /*get_filetype - Derive file type from filename */
